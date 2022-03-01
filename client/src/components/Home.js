@@ -80,14 +80,15 @@ const Home = ({ user, logout }) => {
 
   const addNewConvo = useCallback(
     (recipientId, message) => {
-      conversations.forEach((convo) => {
+      const newConversations = conversations.map((convo) => {
         if (convo.otherUser.id === recipientId) {
           convo.messages.push(message);
           convo.latestMessageText = message.text;
           convo.id = message.conversationId;
         }
+        return convo;
       });
-      setConversations([...conversations]);
+      setConversations(newConversations);
     },
     [setConversations, conversations]
   );
@@ -106,13 +107,14 @@ const Home = ({ user, logout }) => {
         setConversations((prev) => [newConvo, ...prev]);
       }
 
-      conversations.forEach((convo) => {
+      const newConversations = conversations.map((convo) => {
         if (convo.id === message.conversationId) {
           convo.messages.push(message);
           convo.latestMessageText = message.text;
         }
+        return convo;
       });
-      setConversations([...conversations]);
+      setConversations(newConversations);
     },
     [setConversations, conversations]
   );
@@ -183,6 +185,9 @@ const Home = ({ user, logout }) => {
     const fetchConversations = async () => {
       try {
         const { data } = await axios.get('/api/conversations');
+        data.forEach((item) => {
+          item.messages.sort((a, b) => a.id - b.id);
+        });
         setConversations(data);
       } catch (error) {
         console.error(error);
