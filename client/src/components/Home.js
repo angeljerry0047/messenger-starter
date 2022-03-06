@@ -1,23 +1,37 @@
 import React, { useCallback, useEffect, useState, useContext } from 'react';
 import axios from 'axios';
 import { useHistory } from 'react-router-dom';
-import { Grid, CssBaseline, Button } from '@material-ui/core';
+import {
+  Grid,
+  CssBaseline,
+  Button,
+  AppBar,
+  Toolbar,
+  Typography,
+} from '@material-ui/core';
 import { makeStyles } from '@material-ui/core/styles';
 
 import { SidebarContainer } from '../components/Sidebar';
 import { ActiveChat } from '../components/ActiveChat';
 import { SocketContext } from '../context/socket';
+import { AuthContext } from '../context/auth';
 
 const useStyles = makeStyles((theme) => ({
   root: {
-    height: '100vh',
+    height: 'calc(100vh - 64px)',
+  },
+  appbar: {
+    flexGrow: 1,
+  },
+  title: {
+    flexGrow: 1,
   },
 }));
 
-const Home = ({ user, logout }) => {
-  const history = useHistory();
-
+const Home = () => {
+  const { user, logout } = useContext(AuthContext);
   const socket = useContext(SocketContext);
+  const history = useHistory();
 
   const [conversations, setConversations] = useState([]);
   const [activeConversation, setActiveConversation] = useState(null);
@@ -82,9 +96,11 @@ const Home = ({ user, logout }) => {
     (recipientId, message) => {
       const newConversations = conversations.map((convo) => {
         if (convo.otherUser.id === recipientId) {
-          convo.messages.push(message);
-          convo.latestMessageText = message.text;
-          convo.id = message.conversationId;
+          const convoCopy = { ...convo };
+          convoCopy.messages.push(message);
+          convoCopy.latestMessageText = message.text;
+          convoCopy.id = message.conversationId;
+          return convoCopy;
         }
         return convo;
       });
@@ -109,8 +125,10 @@ const Home = ({ user, logout }) => {
 
       const newConversations = conversations.map((convo) => {
         if (convo.id === message.conversationId) {
-          convo.messages.push(message);
-          convo.latestMessageText = message.text;
+          const convoCopy = { ...convo };
+          convoCopy.messages.push(message);
+          convoCopy.latestMessageText = message.text;
+          return convoCopy;
         }
         return convo;
       });
@@ -151,6 +169,31 @@ const Home = ({ user, logout }) => {
     );
   }, []);
 
+  const handleTypingIndicator = useCallback(
+    (data) => {
+      // if sender isn't null, that means the message needs to be put in a brand new convo
+      const { user, typing } = data;
+      setConversations((prev) =>
+        prev.map((convo) => {
+          if (convo.otherUser.id === user.id) {
+            const convoCopy = { ...convo };
+            if (typing) {
+              convoCopy.messages.push({ id: Date.now(), isTyping: true });
+            } else {
+              convoCopy.messages = convoCopy.messages.filter(
+                (message) => Boolean(message?.isTyping) === false
+              );
+            }
+            return convoCopy;
+          } else {
+            return convo;
+          }
+        })
+      );
+    },
+    [setConversations]
+  );
+
   // Lifecycle
 
   useEffect(() => {
@@ -158,6 +201,7 @@ const Home = ({ user, logout }) => {
     socket.on('add-online-user', addOnlineUser);
     socket.on('remove-offline-user', removeOfflineUser);
     socket.on('new-message', addMessageToConversation);
+    socket.on('display', handleTypingIndicator);
 
     return () => {
       // before the component is destroyed
@@ -165,8 +209,15 @@ const Home = ({ user, logout }) => {
       socket.off('add-online-user', addOnlineUser);
       socket.off('remove-offline-user', removeOfflineUser);
       socket.off('new-message', addMessageToConversation);
+      socket.off('display', handleTypingIndicator);
     };
-  }, [addMessageToConversation, addOnlineUser, removeOfflineUser, socket]);
+  }, [
+    addMessageToConversation,
+    addOnlineUser,
+    handleTypingIndicator,
+    removeOfflineUser,
+    socket,
+  ]);
 
   useEffect(() => {
     // when fetching, prevent redirect
@@ -185,9 +236,6 @@ const Home = ({ user, logout }) => {
     const fetchConversations = async () => {
       try {
         const { data } = await axios.get('/api/conversations');
-        data.forEach((item) => {
-          item.messages.sort((a, b) => a.id - b.id);
-        });
         setConversations(data);
       } catch (error) {
         console.error(error);
@@ -198,6 +246,48 @@ const Home = ({ user, logout }) => {
     }
   }, [user]);
 
+  useEffect(() => {
+    if (activeConversation) {
+      updateReadTime();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeConversation]);
+
+  const updateReadTime = async () => {
+    const conversation = conversations
+      ? conversations.find(
+          (conversation) =>
+            conversation.otherUser.username === activeConversation
+        )
+      : {};
+    const payload = {
+      recipientId: conversation.otherUser.id,
+      conversationId: conversation.id || null,
+      readTime: new Date().toISOString(),
+    };
+    try {
+      await axios.put('/api/updateReadTime', payload);
+      const { recipientId, conversationId, readTime } = payload;
+
+      const newConversations = conversations.map((convo) => {
+        if (convo.id === conversationId) {
+          const convoCopy = { ...convo };
+          if (convo.user1Id === recipientId) {
+            convoCopy.user2ReadTime = readTime;
+          } else {
+            convoCopy.user1ReadTime = readTime;
+          }
+          convoCopy.unreadCount = 0;
+          return convoCopy;
+        }
+        return convo;
+      });
+      setConversations(newConversations);
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
   const handleLogout = async () => {
     if (user && user.id) {
       await logout(user.id);
@@ -206,7 +296,18 @@ const Home = ({ user, logout }) => {
 
   return (
     <>
-      <Button onClick={handleLogout}>Logout</Button>
+      <div className={classes.appbar}>
+        <AppBar position="relative" color="primary">
+          <Toolbar>
+            <Typography variant="h6" className={classes.title}>
+              Chat Room
+            </Typography>
+            <Button onClick={handleLogout} variant="outlined" color="inherit">
+              Logout
+            </Button>
+          </Toolbar>
+        </AppBar>
+      </div>
       <Grid container component="main" className={classes.root}>
         <CssBaseline />
         <SidebarContainer
